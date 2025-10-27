@@ -1,10 +1,15 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 import asyncio
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from queue import Queue, Empty
 from stt import stt
 
 app = FastAPI()
+
+# ログ設定
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 @app.websocket("/ws/stt")
@@ -51,6 +56,7 @@ async def websocket_stt(websocket: WebSocket):
                     }
                     result_queue.put(result_dict)
         except Exception as e:
+            logger.error(f"STT処理でエラーが発生: {e}")
             result_queue.put({"error": str(e)})
         finally:
             result_queue.put(None)
@@ -66,7 +72,12 @@ async def websocket_stt(websocket: WebSocket):
                 while True:
                     data = await websocket.receive_bytes()
                     audio_queue.put(data)
+                    logger.info(f"音声データを受信: {len(data)}バイト")
             except WebSocketDisconnect:
+                logger.info("WebSocket接続が切断されました")
+                audio_queue.put(None)
+            except Exception as e:
+                logger.error(f"音声受信でエラー: {e}")
                 audio_queue.put(None)
 
         async def send_results():
@@ -80,7 +91,8 @@ async def websocket_stt(websocket: WebSocket):
                     await websocket.send_json(result)
                 except Empty:
                     continue
-                except Exception:
+                except Exception as e:
+                    logger.error(f"結果送信でエラー: {e}")
                     break
 
         # 両方のタスクを並行実行
@@ -90,8 +102,8 @@ async def websocket_stt(websocket: WebSocket):
             return_exceptions=True
         )
 
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"WebSocket処理でエラーが発生: {e}")
     finally:
         # クリーンアップ
         audio_queue.put(None)
@@ -102,5 +114,5 @@ async def websocket_stt(websocket: WebSocket):
         if websocket.client_state.name != "DISCONNECTED":
             try:
                 await websocket.close()
-            except:
-                pass
+            except Exception as e:
+                logger.error(f"WebSocket終了時にエラーが発生: {e}")
