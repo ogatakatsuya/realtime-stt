@@ -13,13 +13,21 @@ export interface UseWebSocketSTTReturn {
   connect: () => void;
   disconnect: () => void;
   sendAudio: (audioData: ArrayBuffer) => void;
+  clearTranscript: () => void;
   isConnected: boolean;
   transcript: string;
   interimTranscript: string;
   error: string | null;
 }
 
-export const useWebSocketSTT = (url: string): UseWebSocketSTTReturn => {
+export interface UseWebSocketSTTProps {
+  url: string;
+  onFinal?: (finalText: string) => void;
+}
+
+export const useWebSocketSTT = (props: UseWebSocketSTTProps | string): UseWebSocketSTTReturn => {
+  // 後方互換性のために文字列も受け入れる
+  const { url, onFinal } = typeof props === 'string' ? { url: props, onFinal: undefined } : props;
   const [isConnected, setIsConnected] = useState(false);
   const [transcript, setTranscript] = useState('');
   const [interimTranscript, setInterimTranscript] = useState('');
@@ -54,6 +62,10 @@ export const useWebSocketSTT = (url: string): UseWebSocketSTTReturn => {
           if (result.is_final) {
             setTranscript((prev) => prev + text);
             setInterimTranscript('');
+            // is_finalフラグが立った時にコールバックを実行
+            if (onFinal && text) {
+              onFinal(text);
+            }
           } else {
             setInterimTranscript(text);
           }
@@ -91,6 +103,11 @@ export const useWebSocketSTT = (url: string): UseWebSocketSTTReturn => {
     }
   }, []);
 
+  const clearTranscript = useCallback(() => {
+    setTranscript('');
+    setInterimTranscript('');
+  }, []);
+
   // クリーンアップ
   useEffect(() => {
     return () => {
@@ -102,6 +119,7 @@ export const useWebSocketSTT = (url: string): UseWebSocketSTTReturn => {
     connect,
     disconnect,
     sendAudio,
+    clearTranscript,
     isConnected,
     transcript,
     interimTranscript,
