@@ -1,227 +1,279 @@
-import { useEffect, useState, useRef } from 'react';
-import { useWebSocketSTT } from './hooks/useWebSocketSTT';
-import { useAudioRecorder } from './hooks/useAudioRecorder';
-import { useGenerateSpeech } from './hooks/useGenerateSpeech';
-import { useAudioPlayer } from './hooks/useAudioPlayer';
-import type { ChatMessage, Message } from './types/conversation';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './App.css';
+import { useAudioRecorder } from './hooks/useAudioRecorder';
+import { useConversation } from './hooks/useConversation';
+import { useWebSocketStt } from './hooks/useWebSocketSTT';
+import type { ConnectionStatus, ConversationMessage, SttResultPayload } from './types/conversation';
+
+const DEFAULT_HTTP_BASE = 'http://localhost:8080';
+const DEFAULT_WS_PATH = '/ws/stt';
+const DEFAULT_WS_BASE = DEFAULT_HTTP_BASE.replace(/^http/, 'ws');
+const DEFAULT_WS_URL = `${DEFAULT_WS_BASE}${DEFAULT_WS_PATH}`;
+
+function normalizeWebSocketUrl(rawUrl: string | undefined): string {
+	if (!rawUrl || rawUrl.length === 0) {
+		return DEFAULT_WS_URL;
+	}
+
+	if (rawUrl.startsWith('ws://') || rawUrl.startsWith('wss://')) {
+		return rawUrl;
+	}
+
+	if (rawUrl.startsWith('http://') || rawUrl.startsWith('https://')) {
+		return rawUrl.replace(/^http/, 'ws');
+	}
+
+	if (rawUrl.startsWith('/')) {
+		return `${DEFAULT_WS_BASE}${rawUrl}`;
+	}
+
+	return rawUrl;
+}
+
+function normalizeApiBaseUrl(rawUrl: string | undefined): string {
+	if (!rawUrl || rawUrl.length === 0) {
+		return DEFAULT_HTTP_BASE;
+	}
+
+	if (rawUrl.startsWith('http://') || rawUrl.startsWith('https://')) {
+		return rawUrl;
+	}
+
+	if (rawUrl.startsWith('//')) {
+		return `http:${rawUrl}`;
+	}
+
+	if (rawUrl.startsWith('/')) {
+		return `${DEFAULT_HTTP_BASE}${rawUrl}`;
+	}
+
+	return rawUrl;
+}
+
+function roleLabel(role: ConversationMessage['role']): string {
+	return role === 'user' ? 'You' : 'Assistant';
+}
+
+function statusClass(status: ConnectionStatus): string {
+	switch (status) {
+		case 'connected':
+			return 'status-indicator connected';
+		case 'connecting':
+			return 'status-indicator recording';
+		case 'error':
+			return 'status-indicator disconnected';
+		case 'disconnected':
+			return 'status-indicator disconnected';
+		default:
+			return 'status-indicator';
+	}
+}
 
 function App() {
-  const wsUrl = import.meta.env.VITE_WS_URL || 'ws://localhost:8080/ws/stt';
-  const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8080/generate-speech';
+	const wsUrl = useMemo(
+		() => normalizeWebSocketUrl(import.meta.env.VITE_WS_URL as string | undefined),
+		[],
+	);
+	const apiBaseUrl = useMemo(
+		() => normalizeApiBaseUrl(import.meta.env.VITE_API_BASE_URL as string | undefined),
+		[],
+	);
 
-  // チャットメッセージ履歴
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [conversationHistory, setConversationHistory] = useState<Message[]>([]);
+	const [interimTranscript, setInterimTranscript] = useState('');
+	const [runtimeError, setRuntimeError] = useState<string | null>(null);
 
-  // 音声再生フック
-  const { playAudioStream, isPlaying, error: playerError } = useAudioPlayer();
+	const lastFinalTranscriptRef = useRef('');
+	const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
-  // 音声生成フック
-  const { generateSpeech, isGenerating, error: generateError } = useGenerateSpeech(apiUrl);
+	const { messages, isGenerating, error: conversationError, handleUserMessage, reset } =
+		useConversation({
+			apiBaseUrl,
+			onError: (message) => setRuntimeError(message),
+		});
 
-  // 録音制御のref（後で定義される関数を参照するため）
-  const stopRecordingRef = useRef<(() => void) | null>(null);
-  const startRecordingRef = useRef<(() => Promise<void>) | null>(null);
+	const handleSttResult = useCallback(
+		(payload: SttResultPayload) => {
+			if (payload.error) {
+				setRuntimeError(payload.error);
+				return;
+			}
 
-  // チャットメッセージの最下部へのref（自動スクロール用）
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+			const transcript = payload.alternatives[0]?.transcript ?? '';
+			if (!transcript) {
+				if (payload.is_final) {
+					setInterimTranscript('');
+				}
+				return;
+			}
 
-  // WebSocketSTTフック（clearTranscriptを先に取得）
-  const {
-    connect,
-    disconnect,
-    sendAudio,
-    clearTranscript,
-    isConnected,
-    transcript,
-    interimTranscript,
-    error: wsError,
-  } = useWebSocketSTT({
-    url: wsUrl,
-    onFinal: (finalText: string) => {
-      // is_finalフラグが立った時の処理
-      console.log('Final transcript received:', finalText);
+			if (payload.is_final) {
+				const normalized = transcript.trim();
+				if (normalized.length === 0) {
+					setInterimTranscript('');
+					return;
+				}
 
-      // WebSocketを切断（録音も停止）
-      disconnect();
-      if (stopRecordingRef.current) {
-        stopRecordingRef.current();
-      }
+				if (normalized !== lastFinalTranscriptRef.current) {
+					lastFinalTranscriptRef.current = normalized;
+					setInterimTranscript('');
+					handleUserMessage(normalized).catch((err) => {
+						console.error('[App] failed to handle user transcript', err);
+						setRuntimeError('Failed to handle final transcript.');
+					});
+				}
+			} else {
+				setInterimTranscript(transcript);
+			}
+		},
+		[handleUserMessage],
+	);
 
-      // ユーザーメッセージをチャットに追加
-      const userMessage: ChatMessage = {
-        id: `user-${Date.now()}`,
-        role: 'user',
-        content: finalText,
-        timestamp: new Date(),
-      };
-      setMessages((prev) => [...prev, userMessage]);
+	const {
+		connect,
+		disconnect,
+		sendAudioChunk,
+		status: connectionStatus,
+		error: sttError,
+	} = useWebSocketStt({
+		url: wsUrl,
+		onResult: handleSttResult,
+		onError: (message) => setRuntimeError(message),
+	});
 
-      // 非同期処理を実行
-      (async () => {
-        try {
-          // 音声生成APIを呼び出し（会話履歴のみを渡す。現在のメッセージはcontentとして渡される）
-          const { audioChunks } = await generateSpeech(finalText, conversationHistory);
+	const {
+		start: startRecorder,
+		stop: stopRecorder,
+		isRecording,
+		error: audioError,
+	} = useAudioRecorder({
+		onData: (chunk) => {
+			const success = sendAudioChunk(chunk);
+			if (!success) {
+				setRuntimeError('Failed to stream audio chunk to backend.');
+			}
+		},
+	});
 
-          // AIの返答メッセージをチャットに追加（音声再生中の表示用）
-          const assistantMessage: ChatMessage = {
-            id: `assistant-${Date.now()}`,
-            role: 'assistant',
-            content: '音声で応答中...',
-            timestamp: new Date(),
-            isPlaying: true,
-          };
-          setMessages((prev) => [...prev, assistantMessage]);
+	useEffect(() => {
+		if (sttError) {
+			setRuntimeError(sttError);
+		}
+	}, [sttError]);
 
-          // 会話履歴にユーザーメッセージのみ追加（AI返答テキストは取得できないため）
-          const userHistoryMessage: Message = {
-            role: 'user',
-            parts: [{ text: finalText }],
-          };
-          setConversationHistory((prev) => [...prev, userHistoryMessage]);
+	useEffect(() => {
+		if (audioError) {
+			setRuntimeError(audioError);
+		}
+	}, [audioError]);
 
-          // transcriptをクリア（次の会話に備える）
-          clearTranscript();
+	useEffect(() => {
+		if (messagesEndRef.current) {
+			messagesEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
+		}
+	}, [messages, interimTranscript]);
 
-          // 音声を再生（再生終了後に録音を再開）
-          playAudioStream(audioChunks, 24000, async () => {
-            // 音声再生終了後、録音とWebSocket接続を再開
-            console.log('Audio playback ended, restarting recording...');
-            connect();
-            if (startRecordingRef.current) {
-              await startRecordingRef.current();
-            }
-          });
-        } catch (err) {
-          console.error('Failed to generate or play speech:', err);
-        }
-      })();
-    },
-  });
+	useEffect(() => () => {
+		void stopRecorder();
+		disconnect();
+	}, [disconnect, stopRecorder]);
 
-  const {
-    startRecording,
-    stopRecording,
-    isRecording,
-    error: recError,
-  } = useAudioRecorder({
-    onAudioData: sendAudio,
-    sampleRate: 16000,
-  });
+	const handleStart = useCallback(async () => {
+		setRuntimeError(null);
+		try {
+			await connect();
+			await startRecorder();
+		} catch (err) {
+			console.error('[App] failed to start session', err);
+			setRuntimeError('Failed to start recording session.');
+		}
+	}, [connect, startRecorder]);
 
-  // refに録音関数を設定
-  useEffect(() => {
-    startRecordingRef.current = startRecording;
-    stopRecordingRef.current = stopRecording;
-  }, [startRecording, stopRecording]);
+	const handleStop = useCallback(async () => {
+		try {
+			await stopRecorder();
+		} catch (err) {
+			console.error('[App] failed to stop recorder', err);
+		}
+		disconnect();
+		setInterimTranscript('');
+	}, [disconnect, stopRecorder]);
 
-  useEffect(() => {
-    if (isRecording && !isConnected) {
-      connect();
-    }
-  }, [isRecording, isConnected, connect]);
+	const handleReset = useCallback(() => {
+		reset();
+		setInterimTranscript('');
+		setRuntimeError(null);
+		lastFinalTranscriptRef.current = '';
+	}, [reset]);
 
-  // メッセージが更新されたら自動スクロール
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, transcript, interimTranscript]);
+	const aggregatedError = runtimeError ?? conversationError ?? null;
 
-  const handleStartRecording = async () => {
-    connect();
-    await startRecording();
-  };
+	const recordingIndicatorClass = isRecording ? 'status-indicator recording' : 'status-indicator stopped';
+	const generationIndicatorClass = isGenerating ? 'status-indicator generating' : 'status-indicator';
 
-  const handleStopRecording = () => {
-    stopRecording();
-    disconnect();
-  };
+	return (
+		<div className="app">
+			<h1>Realtime Speech Chat</h1>
 
-  const error = wsError || recError || playerError || generateError;
+			<div className="status">
+				<span className={statusClass(connectionStatus)}>STT {connectionStatus}</span>
+				<span className={recordingIndicatorClass}>{isRecording ? 'Recording' : 'Stopped'}</span>
+				<span className={generationIndicatorClass}>{isGenerating ? 'Generating' : 'Idle'}</span>
+			</div>
 
-  return (
-    <div className="app">
-      <h1>リアルタイムチャットぼっと</h1>
+			<div className="controls">
+				<button
+					type="button"
+					className="start-button"
+					onClick={() => void handleStart()}
+					disabled={isRecording || connectionStatus === 'connecting'}
+				>
+					Start Session
+				</button>
+				<button
+					type="button"
+					className="stop-button"
+					onClick={() => void handleStop()}
+					disabled={!isRecording && connectionStatus !== 'connected'}
+				>
+					Stop Session
+				</button>
+				<button type="button" onClick={handleReset} disabled={messages.length === 0 && !interimTranscript}>
+					Reset Chat
+				</button>
+			</div>
 
-      <div className="status">
-        <div className={`status-indicator ${isConnected ? 'connected' : 'disconnected'}`}>
-          {isConnected ? '接続中' : '未接続'}
-        </div>
-        <div className={`status-indicator ${isRecording ? 'recording' : 'stopped'}`}>
-          {isRecording ? '録音中' : '停止中'}
-        </div>
-        {isGenerating && (
-          <div className="status-indicator generating">
-            返答生成中...
-          </div>
-        )}
-        {isPlaying && (
-          <div className="status-indicator playing">
-            再生中...
-          </div>
-        )}
-      </div>
+			{aggregatedError ? <div className="error">{aggregatedError}</div> : null}
 
-      <div className="controls">
-        {!isRecording ? (
-          <button onClick={handleStartRecording} className="start-button">
-            会話を開始する
-          </button>
-        ) : (
-          <button onClick={handleStopRecording} className="stop-button">
-            会話を終了する
-          </button>
-        )}
-      </div>
+			<div className="chat-container">
+				<div className="chat-messages">
+					{messages.map((message) => (
+						<div
+							key={message.id}
+							className={`message ${message.role === 'user' ? 'message-user' : 'message-assistant'}`}
+						>
+							<div className="message-header">
+								<span className="message-role">{roleLabel(message.role)}</span>
+								<span className="message-time">{new Date(message.createdAt).toLocaleTimeString()}</span>
+							</div>
+							<div className="message-content">
+								{message.parts.map((part) => part.text).join('\n') || '(empty)'}
+							</div>
+							{message.isStreaming ? <div className="message-status">Streaming...</div> : null}
+							{message.error ? <div className="message-status">{message.error}</div> : null}
+						</div>
+					))}
+				</div>
 
-      {error && (
-        <div className="error">
-          エラー: {error}
-        </div>
-      )}
-
-      <div className="chat-container">
-        <div className="chat-messages">
-          {messages.map((message) => (
-            <div
-              key={message.id}
-              className={`message ${message.role === 'user' ? 'message-user' : 'message-assistant'}`}
-            >
-              <div className="message-header">
-                <span className="message-role">
-                  {message.role === 'user' ? 'あなた' : 'AI'}
-                </span>
-                <span className="message-time">
-                  {message.timestamp.toLocaleTimeString('ja-JP', {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  })}
-                </span>
-              </div>
-              <div className="message-content">{message.content}</div>
-              {message.isPlaying && (
-                <div className="message-status">再生中...</div>
-              )}
-            </div>
-          ))}
-
-          {/* 現在の文字起こし結果 */}
-          {(transcript || interimTranscript) && (
-            <div className="current-transcription">
-              <div className="transcription-label">現在の文字起こし:</div>
-              {transcript && <div className="final-text">{transcript}</div>}
-              {interimTranscript && (
-                <div className="interim-text">{interimTranscript}</div>
-              )}
-            </div>
-          )}
-
-          {/* 自動スクロール用の要素 */}
-          <div ref={messagesEndRef} />
-        </div>
-      </div>
-    </div>
-  );
+				<div ref={messagesEndRef} />
+				{interimTranscript ? (
+					<div className="current-transcription">
+						<div className="transcription-label">Listening...</div>
+						<div className="interim-text">{interimTranscript}</div>
+					</div>
+				) : null}
+			</div>
+		</div>
+	);
 }
 
 export default App;

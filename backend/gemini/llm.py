@@ -7,19 +7,18 @@ from env import env
 logger = logging.getLogger(__name__)
 
 # システムプロンプト
-SYSTEM_PROMPT = """あなたは親切で知的な音声アシスタントです。
+SYSTEM_PROMPT = """あなたは親切で知的なAIアシスタントです。
 
 重要な制約：
-1. 返答は音声で読み上げられるため、Markdown記法（**太字**、# 見出し、リストなど）を使わないでください
+1. Markdown記法（**太字**、# 見出し、リストなど）を使わないでください
 2. 返答文は100文字以内で簡潔にしてください
 3. 簡潔で自然な話し言葉で返答してください
 
-必ず平易な日本語で、音声として聞きやすい返答を心がけてください。"""
+必ず平易な日本語で、分かりやすい返答を心がけてください。"""
 
 
 async def generate_response_stream(
-    user_message: str,
-    conversation_history: list[dict[str, str]] = None
+    conversation_history: list[dict[str, str]]
 ) -> AsyncGenerator[str, None]:
     """
     Gemini APIを使ってテキストから返答をストリーミング生成する
@@ -48,17 +47,9 @@ async def generate_response_stream(
         })
 
         # 過去の会話履歴を追加
-        if conversation_history:
-            contents.extend(conversation_history)
-
-        # 現在のユーザーメッセージを追加
-        contents.append({
-            "role": "user",
-            "parts": [{"text": user_message}]
-        })
+        contents.extend(conversation_history)
 
         logger.info(contents)
-
 
         response = await client.aio.models.generate_content_stream(
             model='gemini-2.5-flash-lite',

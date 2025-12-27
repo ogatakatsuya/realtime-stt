@@ -1,14 +1,14 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
-from typing import Optional
 import asyncio
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from queue import Queue, Empty
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+
 from gemini.stt import stt
 from gemini.llm import generate_response_stream
-from gemini.tts import tts_streaming
 from settings import set_cors_middleware
 
 app = FastAPI()
@@ -26,8 +26,7 @@ class Message(BaseModel):
 
 
 class GenerateSpeechRequest(BaseModel):
-    content: str
-    conversation_history: Optional[list[Message]] = None
+    conversation_history: list[Message]
 
 
 @app.websocket("/ws/stt")
@@ -138,42 +137,35 @@ async def websocket_stt(websocket: WebSocket):
 @app.post("/generate-speech")
 async def generate_speech(request: GenerateSpeechRequest):
     """
-    テキストからGemini APIで返答を生成し、その返答をTTSで音声化してストリーミング返却
+    テキストからGemini APIで返答を生成し、テキストストリームとして返却
 
     Args:
         request: content フィールドを含むリクエストボディ
 
     Returns:
-        StreamingResponse: 音声データのストリーム（audio/wav）
+        StreamingResponse: テキストデータのストリーム（text/plain）
     """
     try:
-        logger.info(f"音声生成リクエスト受信: {request.content[:50]}...")
-
         # 会話履歴をdictのリストに変換
-        history = None
-        if request.conversation_history:
-            history = [msg.model_dump() for msg in request.conversation_history]
+        history = [msg.model_dump() for msg in request.conversation_history]
 
-        # Gemini → TTS → クライアントのストリーミングチェーン
-        async def streaming_audio_generator():
-            # Geminiからテキストストリームを取得してTTSにストリーミング
+        # Geminiからテキストストリームを取得してそのまま返す
+        async def streaming_text_generator():
             text_stream = generate_response_stream(
-                user_message=request.content,
                 conversation_history=history
             )
 
-            # TTSストリーミング（Geminiのテキストストリームを直接渡す）
-            async for audio_chunk in tts_streaming(text_stream):
-                yield audio_chunk
+            async for chunk in text_stream:
+                yield chunk
 
         return StreamingResponse(
-            streaming_audio_generator(),
-            media_type="audio/l16",
+            streaming_text_generator(),
+            media_type="text/plain",
             headers={
                 "Content-Disposition": "inline",
             }
         )
 
     except Exception as e:
-        logger.error(f"音声生成エンドポイントでエラーが発生: {e}")
+        logger.error(f"応答生成エンドポイントでエラーが発生: {e}")
         raise

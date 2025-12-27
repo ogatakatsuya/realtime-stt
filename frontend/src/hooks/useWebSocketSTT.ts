@@ -1,128 +1,161 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { ConnectionStatus, SttResultPayload } from '../types/conversation';
 
-export interface STTResult {
-  is_final: boolean;
-  stability: number;
-  alternatives: Array<{
-    transcript: string;
-    confidence: number;
-  }>;
+interface UseWebSocketSttOptions {
+  url: string;
+  onResult?: (payload: SttResultPayload) => void;
+  onError?: (message: string) => void;
 }
 
-export interface UseWebSocketSTTReturn {
-  connect: () => void;
+interface UseWebSocketSttResult {
+  connect: () => Promise<void>;
   disconnect: () => void;
-  sendAudio: (audioData: ArrayBuffer) => void;
-  clearTranscript: () => void;
-  isConnected: boolean;
-  transcript: string;
-  interimTranscript: string;
+  sendAudioChunk: (chunk: ArrayBuffer) => boolean;
+  status: ConnectionStatus;
   error: string | null;
 }
 
-export interface UseWebSocketSTTProps {
-  url: string;
-  onFinal?: (finalText: string) => void;
-}
-
-export const useWebSocketSTT = (props: UseWebSocketSTTProps | string): UseWebSocketSTTReturn => {
-  // 後方互換性のために文字列も受け入れる
-  const { url, onFinal } = typeof props === 'string' ? { url: props, onFinal: undefined } : props;
-  const [isConnected, setIsConnected] = useState(false);
-  const [transcript, setTranscript] = useState('');
-  const [interimTranscript, setInterimTranscript] = useState('');
-  const [error, setError] = useState<string | null>(null);
+export function useWebSocketStt({
+  url,
+  onResult,
+  onError,
+}: UseWebSocketSttOptions): UseWebSocketSttResult {
   const wsRef = useRef<WebSocket | null>(null);
+  const [status, setStatus] = useState<ConnectionStatus>('idle');
+  const [error, setError] = useState<string | null>(null);
+  const pendingConnectResolveRef = useRef<(() => void) | null>(null);
+  const pendingConnectRejectRef = useRef<((reason?: unknown) => void) | null>(null);
 
-  const connect = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      return;
+  const cleanupPendingPromise = useCallback(() => {
+    pendingConnectResolveRef.current = null;
+    pendingConnectRejectRef.current = null;
+  }, []);
+
+  const handleError = useCallback(
+    (message: string, evt?: Event | CloseEvent | ErrorEvent) => {
+      setStatus('error');
+      setError(message);
+      onError?.(message);
+      pendingConnectRejectRef.current?.(message);
+      cleanupPendingPromise();
+      if (evt) {
+        console.error('[STT WebSocket] event', evt);
+      }
+    },
+    [cleanupPendingPromise, onError],
+  );
+
+  const connect = useCallback((): Promise<void> => {
+    if (!url) {
+      const message = 'STT WebSocket URL is not configured.';
+      setStatus('error');
+      setError(message);
+      return Promise.reject(new Error(message));
     }
 
-    try {
-      const ws = new WebSocket(url);
-      wsRef.current = ws;
+    if (wsRef.current) {
+      const readyState = wsRef.current.readyState;
+      if (readyState === WebSocket.OPEN) {
+        return Promise.resolve();
+      }
+      if (readyState === WebSocket.CONNECTING) {
+        return new Promise((resolve, reject) => {
+          pendingConnectResolveRef.current = resolve;
+          pendingConnectRejectRef.current = reject;
+        });
+      }
+    }
 
-      ws.onopen = () => {
-        setIsConnected(true);
-        setError(null);
-      };
+    return new Promise((resolve, reject) => {
+      try {
+        setStatus('connecting');
+        const socket = new WebSocket(url);
+        socket.binaryType = 'arraybuffer';
+        wsRef.current = socket;
+        pendingConnectResolveRef.current = resolve;
+        pendingConnectRejectRef.current = reject;
 
-      ws.onmessage = (event) => {
-        try {
-          const result: STTResult = JSON.parse(event.data);
+        socket.onopen = () => {
+          setStatus('connected');
+          setError(null);
+          pendingConnectResolveRef.current?.();
+          cleanupPendingPromise();
+        };
 
-          if ('error' in result) {
-            setError((result as any).error);
-            return;
+        socket.onmessage = (event: MessageEvent<string>) => {
+          try {
+            const payload: SttResultPayload = JSON.parse(event.data);
+            onResult?.(payload);
+          } catch (err) {
+            handleError('Failed to parse STT payload.', event);
+            console.error('[STT WebSocket] parse error', err);
           }
+        };
 
-          const text = result.alternatives[0]?.transcript || '';
+        socket.onerror = (evt: Event) => {
+          handleError('WebSocket error occurred.', evt);
+        };
 
-          if (result.is_final) {
-            setTranscript((prev) => prev + text);
-            setInterimTranscript('');
-            // is_finalフラグが立った時にコールバックを実行
-            if (onFinal && text) {
-              onFinal(text);
-            }
+        socket.onclose = (evt: CloseEvent) => {
+          if (evt.code !== 1000) {
+            handleError(`WebSocket closed unexpectedly (${evt.code}).`, evt);
           } else {
-            setInterimTranscript(text);
+            setStatus('disconnected');
+            cleanupPendingPromise();
           }
-        } catch (err) {
-          console.error('Failed to parse WebSocket message:', err);
-          setError('Failed to parse message');
-        }
-      };
-
-      ws.onerror = (event) => {
-        console.error('WebSocket error:', event);
-        setError('WebSocket connection error');
-      };
-
-      ws.onclose = () => {
-        setIsConnected(false);
-      };
-    } catch (err) {
-      console.error('Failed to connect WebSocket:', err);
-      setError('Failed to connect');
-    }
-  }, [url]);
+          wsRef.current = null;
+        };
+      } catch (err) {
+        console.error('[STT WebSocket] connection error', err);
+        handleError('Failed to establish WebSocket connection.');
+        reject(err);
+      }
+    });
+  }, [cleanupPendingPromise, handleError, onResult, url]);
 
   const disconnect = useCallback(() => {
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
-      setIsConnected(false);
+    const ws = wsRef.current;
+    if (!ws) {
+      return;
     }
-  }, []);
-
-  const sendAudio = useCallback((audioData: ArrayBuffer) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(audioData);
+    ws.onopen = null;
+    ws.onmessage = null;
+    ws.onerror = null;
+    ws.onclose = null;
+    try {
+      ws.close(1000, 'Client closing connection');
+    } catch (err) {
+      console.error('[STT WebSocket] error while closing', err);
     }
-  }, []);
+    wsRef.current = null;
+    setStatus('disconnected');
+    cleanupPendingPromise();
+  }, [cleanupPendingPromise]);
 
-  const clearTranscript = useCallback(() => {
-    setTranscript('');
-    setInterimTranscript('');
-  }, []);
+  const sendAudioChunk = useCallback((chunk: ArrayBuffer): boolean => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+    try {
+      ws.send(chunk);
+      return true;
+    } catch (err) {
+      console.error('[STT WebSocket] failed to send chunk', err);
+      handleError('Failed to send audio chunk.');
+      return false;
+    }
+  }, [handleError]);
 
-  // クリーンアップ
-  useEffect(() => {
-    return () => {
-      disconnect();
-    };
+  useEffect(() => () => {
+    disconnect();
   }, [disconnect]);
 
   return {
     connect,
     disconnect,
-    sendAudio,
-    clearTranscript,
-    isConnected,
-    transcript,
-    interimTranscript,
+    sendAudioChunk,
+    status,
     error,
   };
-};
+}

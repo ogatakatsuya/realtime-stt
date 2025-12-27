@@ -2,31 +2,25 @@
   max-width: 1200px;
   margin: 0 auto;
   padding: 1rem;
-  text-align: center;
-  height: 100vh;
+  min-height: 100vh;
   display: flex;
   flex-direction: column;
   align-items: center;
-  overflow: hidden;
+  text-align: center;
+  gap: 1rem;
 }
 
 h1 {
   font-size: 2.5rem;
-  margin-bottom: 1.5rem;
+  margin-bottom: 0.5rem;
   color: #333;
-}
-
-h2 {
-  font-size: 1.2rem;
-  margin-bottom: 0.25rem;
-  color: #555;
 }
 
 .status {
   display: flex;
   justify-content: center;
   gap: 0.75rem;
-  margin-bottom: 1rem;
+  flex-wrap: wrap;
 }
 
 .status-indicator {
@@ -38,34 +32,24 @@ h2 {
 
 .status-indicator.connected {
   background-color: #4caf50;
-  color: white;
+  color: #fff;
 }
 
-.status-indicator.disconnected {
+.status-indicator.disconnected,
+.status-indicator.stopped {
   background-color: #9e9e9e;
-  color: white;
+  color: #fff;
 }
 
 .status-indicator.recording {
   background-color: #f44336;
-  color: white;
+  color: #fff;
   animation: pulse 1.5s ease-in-out infinite;
-}
-
-.status-indicator.stopped {
-  background-color: #9e9e9e;
-  color: white;
 }
 
 .status-indicator.generating {
   background-color: #ff9800;
-  color: white;
-  animation: pulse 1.5s ease-in-out infinite;
-}
-
-.status-indicator.playing {
-  background-color: #9c27b0;
-  color: white;
+  color: #fff;
   animation: pulse 1.5s ease-in-out infinite;
 }
 
@@ -79,7 +63,10 @@ h2 {
 }
 
 .controls {
-  margin-bottom: 1rem;
+  display: flex;
+  gap: 1rem;
+  justify-content: center;
+  flex-wrap: wrap;
 }
 
 button {
@@ -94,51 +81,49 @@ button {
 
 .start-button {
   background-color: #2196f3;
-  color: white;
+  color: #fff;
 }
 
 .start-button:hover {
   background-color: #1976d2;
-  transform: scale(1.05);
+  transform: scale(1.04);
 }
 
 .stop-button {
   background-color: #f44336;
-  color: white;
+  color: #fff;
 }
 
 .stop-button:hover {
   background-color: #d32f2f;
-  transform: scale(1.05);
+  transform: scale(1.04);
 }
 
 .error {
   padding: 0.75rem;
-  margin-bottom: 1rem;
   background-color: #ffebee;
   color: #c62828;
   border-radius: 8px;
   border-left: 4px solid #f44336;
   font-size: 0.9rem;
+  max-width: 600px;
 }
 
 .chat-container {
-  text-align: left;
   width: 100%;
-  margin-top: 0.5rem;
-  max-width: 1000px;
+  max-width: 900px;
   height: 70vh;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  gap: 0.75rem;
 }
 
 .chat-messages {
   flex: 1;
   padding: 1rem;
   background-color: #f5f5f5;
-  border-radius: 8px;
-  border: 1px solid #ddd;
+  border-radius: 12px;
+  border: 1px solid #d0d0d0;
   overflow-y: auto;
   scroll-behavior: smooth;
   display: flex;
@@ -147,10 +132,12 @@ button {
 }
 
 .message {
-  padding: 0.75rem;
-  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  border-radius: 12px;
+  border: 2px solid transparent;
   max-width: 80%;
   animation: fadeIn 0.3s ease-in;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
 }
 
 @keyframes fadeIn {
@@ -166,14 +153,16 @@ button {
 
 .message-user {
   align-self: flex-end;
-  background-color: #2196f3;
-  color: white;
+  background-color: #e3f2fd;
+  border-color: #1976d2;
+  color: #0d47a1;
 }
 
 .message-assistant {
   align-self: flex-start;
-  background-color: #e8f5e9;
-  border: 1px solid #4caf50;
+  background-color: #f1f8e9;
+  border-color: #2e7d32;
+  color: #1b5e20;
 }
 
 .message-header {
@@ -196,7 +185,7 @@ button {
   font-size: 1rem;
   line-height: 1.5;
   white-space: pre-wrap;
-  word-wrap: break-word;
+  word-break: break-word;
 }
 
 .message-status {
@@ -211,21 +200,15 @@ button {
   background-color: #fff3e0;
   border-radius: 8px;
   border: 1px dashed #ff9800;
-  margin-top: 0.75rem;
   font-size: 0.9rem;
+  text-align: left;
 }
 
 .transcription-label {
   font-size: 0.85rem;
   font-weight: 600;
   color: #f57c00;
-  margin-bottom: 0.5rem;
-}
-
-.final-text {
-  font-size: 1rem;
-  color: #333;
-  margin-bottom: 0.5rem;
+  margin-bottom: 0.4rem;
 }
 
 .interim-text {
