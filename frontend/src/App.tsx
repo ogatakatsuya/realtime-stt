@@ -84,6 +84,7 @@ function App() {
 
 	const lastFinalTranscriptRef = useRef('');
 	const messagesEndRef = useRef<HTMLDivElement | null>(null);
+	const chatMessagesRef = useRef<HTMLDivElement | null>(null);
 
 	const { messages, isGenerating, error: conversationError, handleUserMessage, reset } =
 		useConversation({
@@ -167,6 +168,12 @@ function App() {
 	}, [audioError]);
 
 	useEffect(() => {
+		const container = chatMessagesRef.current;
+		if (container) {
+			if (container.scrollHeight > container.clientHeight) {
+				container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+			}
+		}
 		if (messagesEndRef.current) {
 			messagesEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
 		}
@@ -207,6 +214,23 @@ function App() {
 
 	const aggregatedError = runtimeError ?? conversationError ?? null;
 
+	const renderMessageContent = useCallback((message: ConversationMessage) => {
+		const content = message.parts.map((part) => part.text).join('\n').trim();
+		const hasContent = content.length > 0;
+		const isAssistant = message.role === 'model';
+		const baseClass = 'message-body';
+		const roleClass = isAssistant ? 'assistant' : 'user';
+		const stateClass = hasContent ? 'ready' : 'pending';
+		const className = `${baseClass} ${baseClass}--${roleClass} ${baseClass}--${stateClass}`;
+
+		let displayText = content;
+		if (!hasContent) {
+			displayText = isAssistant ? 'thinking…' : '';
+		}
+
+		return displayText.length === 0 ? null : <div className={className}>{displayText}</div>;
+	}, []);
+
 	const recordingIndicatorClass = isRecording ? 'status-indicator recording' : 'status-indicator stopped';
 	const generationIndicatorClass = isGenerating ? 'status-indicator generating' : 'status-indicator';
 
@@ -245,7 +269,7 @@ function App() {
 			{aggregatedError ? <div className="error">{aggregatedError}</div> : null}
 
 			<div className="chat-container">
-				<div className="chat-messages">
+				<div className="chat-messages" ref={chatMessagesRef}>
 					{messages.map((message) => (
 						<div
 							key={message.id}
@@ -255,9 +279,7 @@ function App() {
 								<span className="message-role">{roleLabel(message.role)}</span>
 								<span className="message-time">{new Date(message.createdAt).toLocaleTimeString()}</span>
 							</div>
-							<div className="message-content">
-								{message.parts.map((part) => part.text).join('\n') || '(empty)'}
-							</div>
+							{renderMessageContent(message)}
 							{message.isStreaming ? <div className="message-status">Streaming...</div> : null}
 							{message.error ? <div className="message-status">{message.error}</div> : null}
 						</div>
