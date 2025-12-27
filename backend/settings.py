@@ -13,11 +13,8 @@ def set_operation_id(app: FastAPI):
 
 def custom_cors_origin_validator(origin: str) -> bool:
     # ワイルドカードパターンに基づいた正規表現
-    preview_pattern = r"https://.*\.d2nx4l1gz5toyj\.amplifyapp\.com"
-    imaker_pattern = r"https://.*\.i-maker\.org"
-    return bool(re.match(preview_pattern, origin)) or bool(
-        re.match(imaker_pattern, origin)
-    )
+    new_pattern = r"https://.*\.d1ryk1scouo4l8\.amplifyapp\.com"
+    return  bool(re.match(new_pattern, origin))
 
 
 class CustomCORSMiddleware(StarletteCORSMiddleware):

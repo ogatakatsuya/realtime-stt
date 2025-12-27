@@ -48,8 +48,6 @@ async def generate_response_stream(
         # 過去の会話履歴を追加
         contents.extend(conversation_history)
 
-        logger.info(contents)
-
         response = await client.aio.models.generate_content_stream(
             model='gemini-2.5-flash-lite',
             contents=contents
